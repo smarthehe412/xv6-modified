@@ -51,10 +51,12 @@ struct proc*
 pop_front(struct queue *q) {
   int ret = -1;
   for(int i = 0; i < q->size; i++) {
+    acquire(&q->p[i]->lock);
     if(q->p[i]->state == RUNNABLE) {
       ret = i;
       break;
     }
+    release(&q->p[i]->lock);
   }
   if(ret == -1) return 0;
   struct proc* p = q->p[ret];
@@ -524,7 +526,6 @@ scheduler(void)
     // }
     while((p = pop_front(&que1)) != 0) {
       //printf("q1: pid=%d\n", p->pid);
-      acquire(&p->lock);
       p->state = RUNNING;
       c->proc = p;
       swtch(&c->context, &p->context); p->slot--;//1 时间片
@@ -539,7 +540,6 @@ scheduler(void)
     }
     while((p = pop_front(&que2)) != 0) {
       //printf("q2: pid=%d\n", p->pid);
-      acquire(&p->lock);
       p->state = RUNNING;
       c->proc = p;
       swtch(&c->context, &p->context); p->slot--;//1 时间片
@@ -554,7 +554,6 @@ scheduler(void)
     int T = 0;
     while((p = pop_front(&que3)) != 0 && T < 10) {
       //printf("q3: pid=%d\n", p->pid);
-      acquire(&p->lock);
       p->state = RUNNING;
       c->proc = p;
       swtch(&c->context, &p->context); T++;//1 时间片
@@ -797,14 +796,21 @@ long long proc_set_priority(int t){
 
 long long proc_get_priority(){
   struct proc *p = myproc();
-  return p->priority;
+  acquire(&p->lock);
+  long long ret = p->priority;
+  release(&p->lock);
+  return ret;
 }
 
 
 uint64 read_object(int idx){
   // TODO: add acl checking here
   struct proc *p = myproc();
+
+  acquire(&p->lock);
   if(p->acl & (1<<(idx<<1))) return 0x7f7f7f7f;
+  release(&p->lock);
+
   acquire(&object_lock);
   int value = kernel_object[idx];
   release(&object_lock);
@@ -814,7 +820,11 @@ uint64 read_object(int idx){
 uint64 write_object(int idx, uint64 value){
   // TODO: add acl checking here
   struct proc *p = myproc();
+
+  acquire(&p->lock);
   if(p->acl & (1<<(idx<<1|1))) return 0x7f7f7f7f;
+  release(&p->lock);
+
   acquire(&object_lock);
   kernel_object[idx] = value;
   release(&object_lock);
@@ -822,7 +832,10 @@ uint64 write_object(int idx, uint64 value){
 }
 uint64 read_acl(){
   struct proc *p = myproc();
-  return p->acl;
+  acquire(&p->lock);
+  uint64 ret = p->acl;
+  release(&p->lock);
+  return ret;
 }
 uint64 write_acl(uint64 value){
   struct proc *p = myproc();
