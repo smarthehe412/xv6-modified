@@ -49,17 +49,16 @@ proc_mapstacks(pagetable_t kpgtbl)
 
 struct proc*
 pop_front(struct queue *q) {
+  //printf("fuck size=%d\n", q->size);
   int ret = -1;
   for(int i = 0; i < q->size; i++) {
-    acquire(&q->p[i]->lock);
     if(q->p[i]->state == RUNNABLE) {
       ret = i;
       break;
     }
-    release(&q->p[i]->lock);
   }
   if(ret == -1) return 0;
-  struct proc* p = q->p[ret];
+  struct proc *p = q->p[ret];
   for(int i = ret+1; i < q->size; i++) {
     q->p[i-1] = q->p[i];
   }
@@ -195,7 +194,7 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  
   return p;
 }
 
@@ -220,9 +219,10 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->priority = 0;
   p->acl = 0;
-  p->bel = 0;
   p->slot = 0;
   p->state = UNUSED;
+  delete_proc(p->bel, p);
+  p->bel = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -525,42 +525,60 @@ scheduler(void)
     //   release(&p->lock);
     // }
     while((p = pop_front(&que1)) != 0) {
-      //printf("q1: pid=%d\n", p->pid);
+      //printf("q1: pid=%d slot=%d\n", p->pid, p->slot);
+      acquire(&p->lock);
       p->state = RUNNING;
+      p->slot--;//1 时间片
       c->proc = p;
-      swtch(&c->context, &p->context); p->slot--;//1 时间片
+      swtch(&c->context, &p->context);
       c->proc = 0;
       if(p->slot == 0) {
         p->slot = 10;
+        p->bel = &que2;
         push_back(&que2, p);
       } else {
         push_back(&que1, p);
       }
+      //push_back(&que1, p);
       release(&p->lock);
     }
     while((p = pop_front(&que2)) != 0) {
-      //printf("q2: pid=%d\n", p->pid);
+      //printf("q2: pid=%d slot=%d\n", p->pid, p->slot);
+      acquire(&p->lock);
       p->state = RUNNING;
+      p->slot--;//1 时间片
       c->proc = p;
-      swtch(&c->context, &p->context); p->slot--;//1 时间片
+      swtch(&c->context, &p->context); 
       c->proc = 0;
       if(p->slot == 0) {
+        p->bel = &que3;
         push_back(&que3, p);
       } else {
         push_back(&que2, p);
       }
+      //push_back(&que2, p);
       release(&p->lock);
     }
     int T = 0;
-    while((p = pop_front(&que3)) != 0 && T < 10) {
-      //printf("q3: pid=%d\n", p->pid);
+    while(T < 10) {
+      p = pop_front(&que3);
+      //if(p != 0) printf("q3: p=%p\n", p);
+      if(p == 0) break;
+      //printf("q3: pid=%d T=%d size=%d isque3=%d\n", p->pid, T, que3.size, p->bel == &que3);
+      acquire(&p->lock);
+      
       p->state = RUNNING;
+      T++;//1 时间片
       c->proc = p;
-      swtch(&c->context, &p->context); T++;//1 时间片
+      swtch(&c->context, &p->context); 
       c->proc = 0;
+      //printf("out\n");
       push_back(&que3, p);
+      //printf("out2\n");
       release(&p->lock);
+      //printf("out3\n");
     }
+    
   }
 }
 
@@ -777,7 +795,7 @@ procdump(void)
 
 long long proc_set_priority(int t){
   struct proc *p = myproc();
-  acquire(&p->lock);
+  //acquire(&p->lock);
   p->priority = t;
   delete_proc(p->bel, p);
   if(t >= 0) {
@@ -790,15 +808,15 @@ long long proc_set_priority(int t){
     p->slot = -t;
     push_back(&que3, p);
   }
-  release(&p->lock);
+  //release(&p->lock);
   return t;
 }
 
 long long proc_get_priority(){
   struct proc *p = myproc();
-  acquire(&p->lock);
+  //acquire(&p->lock);
   long long ret = p->priority;
-  release(&p->lock);
+  //release(&p->lock);
   return ret;
 }
 
@@ -806,10 +824,10 @@ long long proc_get_priority(){
 uint64 read_object(int idx){
   // TODO: add acl checking here
   struct proc *p = myproc();
-
-  acquire(&p->lock);
-  if(p->acl & (1<<(idx<<1))) return 0x7f7f7f7f;
-  release(&p->lock);
+  uint64 v = 1; v<<=idx<<1;
+  //acquire(&p->lock);
+  if(p->acl & v) return 0;
+  //release(&p->lock);
 
   acquire(&object_lock);
   int value = kernel_object[idx];
@@ -820,10 +838,10 @@ uint64 read_object(int idx){
 uint64 write_object(int idx, uint64 value){
   // TODO: add acl checking here
   struct proc *p = myproc();
-
-  acquire(&p->lock);
-  if(p->acl & (1<<(idx<<1|1))) return 0x7f7f7f7f;
-  release(&p->lock);
+  uint64 v = 1; v<<=idx<<1|1;
+  //acquire(&p->lock);
+  if(p->acl & v) return 0x7f7f7f7f;
+  //release(&p->lock);
 
   acquire(&object_lock);
   kernel_object[idx] = value;
@@ -832,9 +850,9 @@ uint64 write_object(int idx, uint64 value){
 }
 uint64 read_acl(){
   struct proc *p = myproc();
-  acquire(&p->lock);
+  //acquire(&p->lock);
   uint64 ret = p->acl;
-  release(&p->lock);
+  //release(&p->lock);
   return ret;
 }
 uint64 write_acl(uint64 value){
@@ -842,7 +860,7 @@ uint64 write_acl(uint64 value){
   acquire(&p->lock);
   p->acl = value;
   release(&p->lock);
-  return 0x7f7f7f7f;
+  return 0;
 }
 
 void proc_yield(){
